@@ -5,9 +5,25 @@ include 'db_connect.php';
 // Start session
 session_start();
 
-// Check if user is logged in
-if (!isset($_SESSION['email'])) {
-    header('location:login.php');
+// Redirect to login if not authenticated or not a customer
+if (!isset($_SESSION['email']) || $_SESSION['role'] !== 'customer') {
+    header("Location: login.php");
+    exit;
+}
+
+// Fetch users_id from users table based on email
+try {
+    $stmt = $pdo->prepare("SELECT id FROM users WHERE email = ?");
+    $stmt->execute([$_SESSION['email']]);
+    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$user) {
+        echo "<div class='alert alert-danger text-center'>User not found.</div>";
+        exit;
+    }
+    $users_id = $user['id'];
+} catch (PDOException $e) {
+    echo "<div class='alert alert-danger text-center'>Error: " . htmlspecialchars($e->getMessage()) . "</div>";
     exit;
 }
 
@@ -37,9 +53,11 @@ try {
 // Handle adding to cart
 if (isset($_POST['add_to_cart'])) {
     $quantity = (int)$_POST['quantity'];
-    $email = $_SESSION['email'];
 
     try {
+        // Begin transaction for data consistency
+        $pdo->beginTransaction();
+
         // Re-fetch material to ensure latest stock
         $stmt = $pdo->prepare("SELECT quantity FROM materials WHERE id = ?");
         $stmt->execute([$material_id]);
@@ -47,43 +65,46 @@ if (isset($_POST['add_to_cart'])) {
 
         if ($current_material['quantity'] >= $quantity && $quantity > 0) {
             // Check if item already in cart
-            $stmt = $pdo->prepare("SELECT * FROM cart WHERE material_id = ? AND email = ?");
-            $stmt->execute([$material_id, $email]);
+            $stmt = $pdo->prepare("SELECT * FROM cart WHERE material_id = ? AND users_id = ?");
+            $stmt->execute([$material_id, $users_id]);
 
             if ($stmt->rowCount() > 0) {
                 // Update quantity in cart
-                $stmt = $pdo->prepare("UPDATE cart SET quantity = quantity + ? WHERE material_id = ? AND email = ?");
-                $stmt->execute([$quantity, $material_id, $email]);
+                $stmt = $pdo->prepare("UPDATE cart SET quantity = quantity + ? WHERE material_id = ? AND users_id = ?");
+                $stmt->execute([$quantity, $material_id, $users_id]);
             } else {
                 // Add new item to cart
-                $stmt = $pdo->prepare("INSERT INTO cart (email, material_id, quantity) VALUES (?, ?, ?)");
-                $stmt->execute([$email, $material_id, $quantity]);
+                $stmt = $pdo->prepare("INSERT INTO cart (users_id, material_id, quantity) VALUES (?, ?, ?)");
+                $stmt->execute([$users_id, $material_id, $quantity]);
             }
 
             // Update material quantity
             $stmt = $pdo->prepare("UPDATE materials SET quantity = quantity - ? WHERE id = ?");
             $stmt->execute([$quantity, $material_id]);
-            echo "<script>alert('Added to cart!');</script>";
+
+            $pdo->commit();
+            echo "<script>alert('Added to cart!'); window.location.href='cart.php';</script>";
         } else {
+            $pdo->rollBack();
             echo "<script>alert('Error: Requested quantity exceeds available stock!');</script>";
         }
     } catch (PDOException $e) {
+        $pdo->rollBack();
         echo "<div class='alert alert-danger'>Error: " . htmlspecialchars($e->getMessage()) . "</div>";
     }
 }
 
 // Handle adding to wishlist
 if (isset($_POST['add_to_wishlist'])) {
-    $email = $_SESSION['email'];
     try {
         // Check if item already in wishlist
-        $stmt = $pdo->prepare("SELECT * FROM wishlist WHERE material_id = ? AND email = ?");
-        $stmt->execute([$material_id, $email]);
+        $stmt = $pdo->prepare("SELECT * FROM wishlist WHERE material_id = ? AND users_id = ?");
+        $stmt->execute([$material_id, $users_id]);
         if ($stmt->rowCount() == 0) {
             // Add to wishlist
-            $stmt = $pdo->prepare("INSERT INTO wishlist (email, material_id) VALUES (?, ?)");
-            $stmt->execute([$email, $material_id]);
-            echo "<script>alert('Added to wishlist!');</script>";
+            $stmt = $pdo->prepare("INSERT INTO wishlist (users_id, material_id) VALUES (?, ?)");
+            $stmt->execute([$users_id, $material_id]);
+            echo "<script>alert('Added to wishlist!'); window.location.href='wishlist.php';</script>";
         } else {
             echo "<script>alert('Item already in wishlist!');</script>";
         }
@@ -179,9 +200,7 @@ if (isset($_POST['add_to_wishlist'])) {
     </style>
 </head>
 <body>
-    <?php
-    session_start();
-    include 'header.php'; ?>
+    <?php include 'header.php'; ?>
 
     <div class="top-bar">
         <div class="search-container">
@@ -232,8 +251,8 @@ if (isset($_POST['add_to_wishlist'])) {
                                 <label for="quantity">Quantity:</label>
                                 <input type="number" name="quantity" id="quantity" class="form-control quantity-input" min="1" value="1" required>
                             </div>
-                            <button type="submit" name="add_to_cart" class="btn btn-add-to-cart mr-2" style="background-color: #28a745; color: #fff; border: none;">Add to Cart</button>
-                            <button type="submit" name="add_to_wishlist" class="btn btn-add-to-wishlist" style="background-color: #007bff; color: #fff; border: none;">Add to Wishlist</button>
+                            <button type="submit" name="add_to_cart" class="btn btn-add-to-cart mr-2">Add to Cart</button>
+                            <button type="submit" name="add_to_wishlist" class="btn btn-add-to-wishlist">Add to Wishlist</button>
                         </form>
                     <?php endif; ?>
                 </div>
