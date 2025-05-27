@@ -199,8 +199,7 @@ if (isset($_POST['add_to_cart']) && isset($_POST['csrf_token']) && $_POST['csrf_
                 <input type="hidden" name="wishlist_id" value="<?= $fetch_wishlist['id']; ?>">
                 <input type="hidden" name="material_id" value="<?= $fetch_wishlist['material_id']; ?>">
                 <div>
-                    <img src="uploaded_img/<?= htmlspecialchars($fetch_wishlist['image']); ?>" alt="<?= htmlspecialchars($fetch_wishlist['name']); ?>" style="width: 50px; height: 50px; object-fit: cover; border-radius: 5px;">
-                    <span><?= htmlspecialchars($fetch_wishlist['name']); ?></span>
+<img src="<?= htmlspecialchars($fetch_wishlist['image']); ?>" alt="<?= htmlspecialchars($fetch_wishlist['name']); ?>" style="width: 50px; height: 50px; object-fit: cover; border-radius: 5px;">                    <span><?= htmlspecialchars($fetch_wishlist['name']); ?></span>
                 </div>
                 <div>
                     <span>$<?= number_format($fetch_wishlist['price'], 2); ?></span>
