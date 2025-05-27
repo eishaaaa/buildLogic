@@ -9,9 +9,9 @@ include 'db_connect.php';
 session_start();
 session_regenerate_id(true); // Prevent session fixation
 
-// Redirect to login if not authenticated or not a customer
-if (!isset($_SESSION['email']) || $_SESSION['role'] !== 'customer') {
-    header("Location: login.php");
+// Check if user is logged in
+if (!isset($_SESSION['email']) || empty($_SESSION['email'])) {
+    header('Location: login.php');
     exit;
 }
 
@@ -125,7 +125,9 @@ if (isset($_POST['update_qty']) && isset($_POST['csrf_token']) && $_POST['csrf_t
     </style>
 </head>
 <body>
-    <?php include 'header.php'; ?>
+    <?php 
+   
+    include 'header.php'; ?>
 
     <div class="top-bar">
         <div class="search-container">
@@ -178,8 +180,7 @@ if (isset($_POST['update_qty']) && isset($_POST['csrf_token']) && $_POST['csrf_t
                 <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']); ?>">
                 <input type="hidden" name="cart_id" value="<?= $fetch_cart['id']; ?>">
                 <div>
-                    <img src="uploaded_img/<?= htmlspecialchars($fetch_cart['image']); ?>" alt="<?= htmlspecialchars($fetch_cart['name']); ?>" style="width: 50px; height: 50px; object-fit: cover; border-radius: 5px;">
-                    <span><?= htmlspecialchars($fetch_cart['name']); ?> (x<span class="quantity-display"><?= $fetch_cart['quantity']; ?></span>)</span>
+<img src="<?= htmlspecialchars($fetch_cart['image']); ?>" alt="<?= htmlspecialchars($fetch_cart['name']); ?>" style="width: 50px; height: 50px; object-fit: cover; border-radius: 5px;">                    <span><?= htmlspecialchars($fetch_cart['name']); ?> (x<span class="quantity-display"><?= $fetch_cart['quantity']; ?></span>)</span>
                 </div>
                 <div>
                     <span class="sub-total">$<?= number_format($sub_total, 2); ?></span>
