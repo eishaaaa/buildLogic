@@ -2,7 +2,7 @@
 session_start();
 require_once 'db_connect.php';
 
-// Enable error reporting for debugging
+// Enable error reporting
 ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
@@ -13,7 +13,50 @@ if (!isset($_SESSION['csrf_token'])) {
 }
 
 // Redirect to login.php if not authenticated
-if (!isset($_SESSION['user_id']) || !isset($_SESSION['supplier']['supplier_id'])) {
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.php");
+    exit;
+}
+
+// Verify user is a supplier and set supplier_id
+try {
+    $stmt = $pdo->prepare("SELECT role, email, name FROM users WHERE id = ?");
+    $stmt->execute([$_SESSION['user_id']]);
+    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$user || $user['role'] !== 'supplier') {
+        header("Location: login.php");
+        exit;
+    }
+
+    // Fetch or set supplier_id
+    $stmt = $pdo->prepare("SELECT id, company_name, phone FROM suppliers WHERE users_id = ?");
+    $stmt->execute([$_SESSION['user_id']]);
+    $supplier = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($supplier) {
+        $_SESSION['supplier']['supplier_id'] = $supplier['id'];
+    } else {
+        // Check for existing supplier by email
+        $stmt = $pdo->prepare("SELECT id FROM suppliers WHERE users_email = ?");
+        $stmt->execute([$user['email']]);
+        $existing_supplier = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($existing_supplier) {
+            $_SESSION['supplier']['supplier_id'] = $existing_supplier['id'];
+            error_log("Reused existing supplier ID {$existing_supplier['id']} for user ID {$_SESSION['user_id']}");
+        } else {
+            // Create new supplier record
+            $company_name = $user['name'] . "'s Company"; // Placeholder
+            $phone = "0000000000"; // Placeholder
+            $stmt = $pdo->prepare("INSERT INTO suppliers (users_id, users_email, company_name, phone, location) VALUES (?, ?, ?, ?, ?)");
+            $stmt->execute([$_SESSION['user_id'], $user['email'], $company_name, $phone, 'Unknown']);
+            $_SESSION['supplier']['supplier_id'] = $pdo->lastInsertId();
+            logAction($pdo, $_SESSION['user_id'], "Created new supplier record: ID {$_SESSION['supplier']['supplier_id']}");
+            error_log("Created new supplier ID {$_SESSION['supplier']['supplier_id']} for user ID {$_SESSION['user_id']}");
+        }
+    }
+} catch (PDOException $e) {
+    error_log("Auth check error: " . $e->getMessage());
     header("Location: login.php");
     exit;
 }
@@ -38,46 +81,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_material'], $_
     $quantity = (int) ($_POST['quantity'] ?? 0);
     $supplier_id = $_SESSION['supplier']['supplier_id'];
 
-    // Validate CSRF token
+    // Validate inputs per schema
     if ($_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         $upload_msg = "Invalid CSRF token.";
         error_log("Upload error: Invalid CSRF token");
-    }
-    // Validate required fields
-    elseif (empty($name)) {
-        $upload_msg = "Material name is required.";
-        error_log("Upload error: Material name is empty");
-    } elseif (empty($city)) {
-        $upload_msg = "City is required.";
-        error_log("Upload error: City is empty");
+    } elseif (empty($name) || strlen($name) > 255) {
+        $upload_msg = "Material name is required and must be 255 characters or less.";
+        error_log("Upload error: Invalid material name");
+    } elseif (empty($city) || strlen($city) > 100) {
+        $upload_msg = "City is required and must be 100 characters or less.";
+        error_log("Upload error: Invalid city");
     } elseif (!isset($_FILES['image']) || $_FILES['image']['error'] == UPLOAD_ERR_NO_FILE) {
         $upload_msg = "Image upload is required.";
         error_log("Upload error: No image uploaded");
-    } elseif ($price <= 0) {
-        $upload_msg = "Price must be greater than zero.";
+    } elseif ($price <= 0 || $price > 99999999.99) {
+        $upload_msg = "Price must be greater than zero and less than 100,000,000.";
         error_log("Upload error: Invalid price ($price)");
     } elseif ($quantity < 0) {
         $upload_msg = "Quantity cannot be negative.";
         error_log("Upload error: Invalid quantity ($quantity)");
     } else {
         $image_path = '';
+        $targetFile = '';
         if ($_FILES['image']['error'] == UPLOAD_ERR_OK) {
-            // Validate file type and size
+            // Validate file type, size, and content
             $allowed_types = ['image/jpeg', 'image/png', 'image/gif'];
             $allowed_extensions = ['jpg', 'jpeg', 'png', 'gif'];
             $max_size = 5 * 1024 * 1024; // 5MB
             $file_size = $_FILES['image']['size'];
-
-            // Check file extension
             $file_ext = strtolower(pathinfo($_FILES['image']['name'], PATHINFO_EXTENSION));
+
+            // Check extension
             if (!in_array($file_ext, $allowed_extensions)) {
                 $upload_msg = "Only JPG, PNG, or GIF files are allowed.";
                 error_log("Upload error: Invalid file extension ($file_ext)");
-            } elseif ($file_size > $max_size) {
+            }
+            // Check size
+            elseif ($file_size > $max_size) {
                 $upload_msg = "Image size must be less than 5MB.";
                 error_log("Upload error: File size too large ($file_size bytes)");
-            } else {
-                // Verify MIME type using finfo
+            }
+            // Check MIME type
+            else {
                 $finfo = finfo_open(FILEINFO_MIME_TYPE);
                 $file_type = finfo_file($finfo, $_FILES['image']['tmp_name']);
                 finfo_close($finfo);
@@ -85,8 +130,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_material'], $_
                 if (!in_array($file_type, $allowed_types)) {
                     $upload_msg = "Invalid file type. Only JPEG, PNG, or GIF images are allowed.";
                     error_log("Upload error: Invalid MIME type ($file_type)");
+                }
+                // Verify image content
+                elseif (!getimagesize($_FILES['image']['tmp_name'])) {
+                    $upload_msg = "Invalid image file.";
+                    error_log("Upload error: Invalid image content for file: " . $_FILES['image']['name']);
                 } else {
-                    $targetDir = __DIR__ . "/Uploads/";
+                    // Set upload directory relative to document root
+                    $targetDir = $_SERVER['DOCUMENT_ROOT'] . '/Uploads/';
+                    $relativePath = '/Uploads/';
+
                     // Create directory if it doesn't exist
                     if (!is_dir($targetDir)) {
                         if (!mkdir($targetDir, 0755, true)) {
@@ -94,24 +147,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_material'], $_
                             error_log("Upload error: Failed to create directory: $targetDir");
                         }
                     }
-                    // Check writability
-                    if (is_writable($targetDir)) {
-                        // Sanitize and generate unique filename
-                        $fileName = basename($_FILES["image"]["name"]);
-                        $fileName = preg_replace("/[^A-Za-z0-9._-]/", "", $fileName);
-                        $targetFile = $targetDir . time() . "_" . $fileName;
 
-                        // Move uploaded file
-                        if (move_uploaded_file($_FILES["image"]["tmp_name"], $targetFile)) {
-                            $image_path = "Uploads/" . basename($targetFile);
-                            error_log("Image uploaded successfully to: $targetFile");
-                        } else {
-                            $upload_msg = "Failed to upload image. Check server permissions.";
-                            error_log("Upload error: Failed to move uploaded file to: $targetFile");
-                        }
-                    } else {
+                    // Check directory writability
+                    if (empty($upload_msg) && !is_writable($targetDir)) {
                         $upload_msg = "Uploads directory is not writable. Contact administrator.";
-                        error_log("Upload error: Uploads directory not writable: $targetDir, Permissions: " . (is_dir($targetDir) ? substr(sprintf('%o', fileperms($targetDir)), -4) : 'directory does not exist'));
+                        error_log("Upload error: Directory not writable: $targetDir, Permissions: " . (is_dir($targetDir) ? substr(sprintf('%o', fileperms($targetDir)), -4) : 'directory does not exist'));
+                    }
+
+                    // Proceed with file upload
+                    if (empty($upload_msg)) {
+                        $fileName = preg_replace("/[^A-Za-z0-9._-]/", "", basename($_FILES['image']['name']));
+                        $uniqueFileName = time() . '_' . hash('sha256', $fileName . microtime()) . '.' . $file_ext;
+                        $targetFile = $targetDir . $uniqueFileName;
+                        $image_path = $relativePath . $uniqueFileName;
+
+                        // Debug file paths
+                        error_log("Attempting to move file to: $targetFile, Temp file: " . $_FILES['image']['tmp_name']);
+
+                        if (!move_uploaded_file($_FILES['image']['tmp_name'], $targetFile)) {
+                            $upload_msg = "Failed to upload image. Check server permissions or disk space.";
+                            error_log("Upload error: Failed to move file to $targetFile");
+                            $image_path = '';
+                        } else {
+                            error_log("Image successfully uploaded to: $targetFile");
+                            // Verify file was written
+                            if (!file_exists($targetFile)) {
+                                $upload_msg = "Image upload failed: File not found after upload.";
+                                error_log("Upload error: File not found after upload: $targetFile");
+                                $image_path = '';
+                            } elseif (strlen($image_path) > 255) {
+                                $upload_msg = "Image path too long for database.";
+                                error_log("Upload error: Image path exceeds 255 characters: $image_path");
+                                unlink($targetFile);
+                                $image_path = '';
+                            }
+                        }
                     }
                 }
             }
@@ -129,58 +199,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_material'], $_
             error_log("Upload error: Image upload error code: " . $_FILES['image']['error']);
         }
 
-        // Proceed to database if upload was successful
+        // Proceed to database only if image was successfully uploaded
         if (empty($upload_msg) && !empty($image_path)) {
             try {
                 $pdo->beginTransaction();
 
-                // Verify or create supplier_id
-                $stmt = $pdo->prepare("SELECT id FROM suppliers WHERE id = ?");
-                $stmt->execute([$supplier_id]);
-                if (!$stmt->fetch(PDO::FETCH_ASSOC)) {
-                    // Supplier ID invalid, create new supplier
-                    $stmt = $pdo->prepare("SELECT email FROM users WHERE id = ? AND role = 'supplier'");
-                    $stmt->execute([$_SESSION['user_id']]);
-                    $user = $stmt->fetch(PDO::FETCH_ASSOC);
-                    if ($user) {
-                        $stmt = $pdo->prepare("INSERT INTO suppliers (users_id, users_email) VALUES (?, ?)");
-                        $stmt->execute([$_SESSION['user_id'], $user['email']]);
-                        $supplier_id = $pdo->lastInsertId();
-                        $_SESSION['supplier']['supplier_id'] = $supplier_id;
-                        logAction($pdo, $_SESSION['user_id'], "Created new supplier record: ID $supplier_id");
-                        error_log("Created new supplier ID $supplier_id for user ID {$_SESSION['user_id']}");
-                    } else {
-                        $upload_msg = "User not found or not a supplier.";
-                        error_log("Upload error: User ID {$_SESSION['user_id']} not found or not a supplier");
-                        if (file_exists($targetFile)) {
-                            unlink($targetFile);
-                            error_log("Deleted orphaned file: $targetFile");
-                        }
-                        $pdo->rollBack();
-                        throw new Exception("Invalid user data");
+                // Verify supplier profile
+                $stmt = $pdo->prepare("SELECT company_name, phone FROM suppliers WHERE id = ? AND users_id = ?");
+                $stmt->execute([$supplier_id, $_SESSION['user_id']]);
+                $supplier = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                if ($supplier && (empty($supplier['company_name']) || empty($supplier['phone']))) {
+                    $upload_msg = "Please complete your supplier profile (company name and phone) before uploading materials.";
+                    error_log("Upload error: Incomplete supplier profile for ID $supplier_id");
+                    if (file_exists($targetFile)) {
+                        unlink($targetFile);
+                        error_log("Deleted orphaned file: $targetFile");
                     }
+                    $pdo->rollBack();
+                } else {
+                    // Insert material
+                    $stmt = $pdo->prepare("INSERT INTO materials (supplier_id, name, city, description, price, quantity, image) 
+                                           VALUES (?, ?, ?, ?, ?, ?, ?)");
+                    $stmt->execute([$supplier_id, $name, $city, $description, $price, $quantity, $image_path]);
+                    $material_id = $pdo->lastInsertId();
+
+                    $pdo->commit();
+                    logAction($pdo, $_SESSION['user_id'], "Uploaded material: $name (ID: $material_id)");
+                    $upload_msg = "Material uploaded successfully!";
+                    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+                    $_SESSION['upload_msg'] = $upload_msg; // Store message for display
+                    header("Location: admin.php?myuploads=true");
+                    exit;
                 }
-
-                // Insert material with valid supplier_id
-                $stmt = $pdo->prepare("INSERT INTO materials (supplier_id, name, city, description, price, quantity, image) 
-                                       VALUES (?, ?, ?, ?, ?, ?, ?)");
-                $stmt->execute([$supplier_id, $name, $city, $description, $price, $quantity, $image_path]);
-                $material_id = $pdo->lastInsertId();
-
-                $pdo->commit();
-                logAction($pdo, $_SESSION['user_id'], "Uploaded material: $name (ID: $material_id)");
-                $upload_msg = "Material uploaded successfully!";
-                header("Location: admin.php?myuploads=true");
-                exit;
-            } catch (Exception $e) {
+            } catch (PDOException $e) {
                 $pdo->rollBack();
                 $upload_msg = "Database error: " . $e->getMessage();
-                error_log("Upload error: Database error during material upload: " . $e->getMessage() . ", Supplier ID: $supplier_id");
+                error_log("Upload error: Database error during material upload: " . $e->getMessage());
                 if (file_exists($targetFile)) {
                     unlink($targetFile);
                     error_log("Deleted orphaned file: $targetFile");
                 }
             }
+        } elseif (!empty($targetFile) && file_exists($targetFile)) {
+            // Clean up if image was uploaded but validation failed
+            unlink($targetFile);
+            error_log("Deleted orphaned file due to upload failure: $targetFile");
         }
     }
 }
@@ -194,8 +258,8 @@ if (isset($_GET['delete']) && isset($_SESSION['supplier']['supplier_id'])) {
         $material = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if ($material) {
-            if (!empty($material['image']) && file_exists(__DIR__ . "/" . $material['image'])) {
-                if (!unlink(__DIR__ . "/" . $material['image'])) {
+            if (!empty($material['image']) && file_exists($_SERVER['DOCUMENT_ROOT'] . $material['image'])) {
+                if (!unlink($_SERVER['DOCUMENT_ROOT'] . $material['image'])) {
                     error_log("Delete error: Failed to delete image: " . $material['image']);
                 }
             }
@@ -219,36 +283,72 @@ $order_msg = "";
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['place_order'], $_POST['csrf_token']) && $_POST['csrf_token'] === $_SESSION['csrf_token'] && isset($_SESSION['supplier']['supplier_id'])) {
     $material_id = (int) ($_POST['material_id'] ?? 0);
     $quantity_ordered = (int) ($_POST['quantity_ordered'] ?? 0);
+    $name = trim($_POST['name'] ?? '');
+    $phone = trim($_POST['phone'] ?? '');
+    $address = trim($_POST['address'] ?? '');
+    $promo_code = trim($_POST['promo_code'] ?? '');
+    $payment_method = trim($_POST['payment_method'] ?? '');
 
     if ($material_id <= 0 || $quantity_ordered <= 0) {
         $order_msg = "Invalid material ID or quantity.";
         error_log("Order error: Invalid material ID ($material_id) or quantity ($quantity_ordered)");
+    } elseif (empty($name) || empty($phone) || empty($address) || empty($payment_method)) {
+        $order_msg = "All order details (name, phone, address, payment method) are required.";
+        error_log("Order error: Missing order details");
     } else {
         try {
-            $stmt = $pdo->prepare("SELECT name, quantity, supplier_id FROM materials WHERE id = ? AND supplier_id = ?");
+            $pdo->beginTransaction();
+
+            // Fetch material details
+            $stmt = $pdo->prepare("SELECT name, quantity, price, supplier_id FROM materials WHERE id = ? AND supplier_id = ?");
             $stmt->execute([$material_id, $_SESSION['supplier']['supplier_id']]);
             $material = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if ($material) {
                 $current_quantity = $material['quantity'];
                 $material_name = $material['name'];
+                $unit_price = $material['price'];
+                $total_price = $unit_price * $quantity_ordered;
 
                 if ($quantity_ordered > $current_quantity) {
                     $order_msg = "Ordered quantity exceeds available stock.";
                     error_log("Order error: Ordered quantity ($quantity_ordered) exceeds stock ($current_quantity) for material ID $material_id");
+                    $pdo->rollBack();
                 } else {
+                    // Insert into orders table
+                    $stmt = $pdo->prepare("
+                        INSERT INTO orders (users_id, total_price, name, phone, address, promo_code, payment_method, status, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)
+                    ");
+                    $stmt->execute([$_SESSION['user_id'], $total_price, $name, $phone, $address, $promo_code, $payment_method]);
+                    $order_id = $pdo->lastInsertId();
+
+                    // Insert into order_items table
+                    $stmt = $pdo->prepare("
+                        INSERT INTO order_items (order_id, material_id, quantity, unit_price)
+                        VALUES (?, ?, ?, ?)
+                    ");
+                    $stmt->execute([$order_id, $material_id, $quantity_ordered, $unit_price]);
+
+                    // Update material quantity
                     $new_quantity = $current_quantity - $quantity_ordered;
                     $stmt = $pdo->prepare("UPDATE materials SET quantity = ? WHERE id = ? AND supplier_id = ?");
                     $stmt->execute([$new_quantity, $material_id, $_SESSION['supplier']['supplier_id']]);
 
-                    logAction($pdo, $_SESSION['user_id'], "Order placed for $quantity_ordered units of $material_name");
+                    $pdo->commit();
+                    logAction($pdo, $_SESSION['user_id'], "Order placed for $quantity_ordered units of $material_name (Order ID: $order_id)");
                     $order_msg = "Order processed successfully!";
+                    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+                    header("Location: admin.php?vieworders=true");
+                    exit;
                 }
             } else {
                 $order_msg = "Material not found or not owned by this supplier.";
                 error_log("Order error: Material ID $material_id not found for supplier ID " . $_SESSION['supplier']['supplier_id']);
+                $pdo->rollBack();
             }
         } catch (PDOException $e) {
+            $pdo->rollBack();
             $order_msg = "Order processing failed: " . $e->getMessage();
             error_log("Order error: " . $e->getMessage());
         }
@@ -260,7 +360,7 @@ $status_msg = "";
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_order_status'], $_POST['order_id'], $_POST['status'], $_POST['csrf_token']) && $_POST['csrf_token'] === $_SESSION['csrf_token'] && isset($_SESSION['supplier']['supplier_id'])) {
     $order_id = filter_var($_POST['order_id'], FILTER_VALIDATE_INT);
     $status = filter_var($_POST['status'], FILTER_SANITIZE_STRING);
-    $valid_statuses = ['pending', 'confirmed', 'shipped', 'delivered', 'cancelled'];
+    $valid_statuses = ['pending', 'processed', 'shipped', 'delivered', 'cancelled'];
 
     if ($order_id && in_array($status, $valid_statuses)) {
         try {
@@ -277,6 +377,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_order_status']
                 $stmt->execute([$status, $order_id]);
                 logAction($pdo, $_SESSION['user_id'], "Updated order $order_id status to $status");
                 $status_msg = "Order status updated successfully!";
+                $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
             } else {
                 $status_msg = "Order not found or not associated with your materials.";
                 error_log("Status update error: Order ID $order_id not found for supplier ID " . $_SESSION['supplier']['supplier_id']);
@@ -295,14 +396,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_order_status']
 
 // Fetch supplier profile details
 $profile = null;
-if (isset($_SESSION['user_id'])) {
-    try {
-        $stmt = $pdo->prepare("SELECT name, email FROM users WHERE id = ? AND role = 'supplier'");
-        $stmt->execute([$_SESSION['user_id']]);
-        $profile = $stmt->fetch(PDO::FETCH_ASSOC);
-    } catch (PDOException $e) {
-        error_log("Profile fetch error: " . $e->getMessage());
-    }
+try {
+    $stmt = $pdo->prepare("SELECT u.name, u.email, s.company_name, s.phone, s.location 
+                           FROM users u 
+                           LEFT JOIN suppliers s ON u.id = s.users_id 
+                           WHERE u.id = ? AND u.role = 'supplier'");
+    $stmt->execute([$_SESSION['user_id']]);
+    $profile = $stmt->fetch(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    error_log("Profile fetch error: " . $e->getMessage());
 }
 ?>
 
@@ -577,6 +679,9 @@ if (isset($_SESSION['user_id'])) {
           </div>
           <div class="profile-info">
             <p><strong>Email:</strong> <?php echo htmlspecialchars($profile['email']); ?></p>
+            <p><strong>Company:</strong> <?php echo htmlspecialchars($profile['company_name'] ?? 'Not set'); ?></p>
+            <p><strong>Phone:</strong> <?php echo htmlspecialchars($profile['phone'] ?? 'Not set'); ?></p>
+            <p><strong>Location:</strong> <?php echo htmlspecialchars($profile['location'] ?? 'Not set'); ?></p>
             <hr>
             <a href="javascript:void(0);" onclick="confirmLogout()" class="logout-link">Logout</a>
           </div>
@@ -593,6 +698,13 @@ if (isset($_SESSION['user_id'])) {
 </nav>
 
 <div class="container">
+  <?php
+  // Display upload message from session
+  if (isset($_SESSION['upload_msg'])) {
+      echo "<div class='alert alert-" . (strpos($_SESSION['upload_msg'], "success") !== false ? "info" : "danger") . "'>" . htmlspecialchars($_SESSION['upload_msg']) . "</div>";
+      unset($_SESSION['upload_msg']);
+  }
+  ?>
   <?php if ($order_msg): ?>
     <div class='alert alert-<?php echo strpos($order_msg, "success") !== false ? "info" : "danger"; ?>'>
       <?php echo htmlspecialchars($order_msg); ?>
@@ -685,7 +797,7 @@ if (isset($_SESSION['user_id'])) {
                     <input type="hidden" name="order_id" value="<?php echo htmlspecialchars($order['order_id']); ?>">
                     <select name="status" class="form-select" style="width: auto;">
                       <option value="pending" <?php echo $order['status'] === 'pending' ? 'selected' : ''; ?>>Pending</option>
-                      <option value="confirmed" <?php echo $order['status'] === 'confirmed' ? 'selected' : ''; ?>>Confirmed</option>
+                      <option value="processed" <?php echo $order['status'] === 'processed' ? 'selected' : ''; ?>>Processed</option>
                       <option value="shipped" <?php echo $order['status'] === 'shipped' ? 'selected' : ''; ?>>Shipped</option>
                       <option value="delivered" <?php echo $order['status'] === 'delivered' ? 'selected' : ''; ?>>Delivered</option>
                       <option value="cancelled" <?php echo $order['status'] === 'cancelled' ? 'selected' : ''; ?>>Cancelled</option>
@@ -720,7 +832,7 @@ if (isset($_SESSION['user_id'])) {
           $materials = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
           if (empty($materials)) {
-              echo "<div class='alert alert-info'>No materials found for supplier ID: " . htmlspecialchars($_SESSION['supplier']['supplier_id']) . "</div>";
+              echo "<div class='alert alert-info'>No materials found.</div>";
               error_log("My uploads: No materials found for supplier ID " . $_SESSION['supplier']['supplier_id']);
           }
 
@@ -728,7 +840,7 @@ if (isset($_SESSION['user_id'])) {
       ?>
         <div class="col-md-4">
           <div class="card p-3">
-            <?php if (!empty($mat['image']) && file_exists(__DIR__ . "/" . $mat['image'])): ?>
+            <?php if (!empty($mat['image']) && file_exists($_SERVER['DOCUMENT_ROOT'] . $mat['image'])): ?>
               <img src="<?php echo htmlspecialchars($mat['image']); ?>" class="thumb mb-2" alt="<?php echo htmlspecialchars($mat['name']); ?>">
             <?php else: ?>
               <div class="placeholder-image">No Image</div>
@@ -736,7 +848,7 @@ if (isset($_SESSION['user_id'])) {
             <?php endif; ?>
             <p><strong><?php echo htmlspecialchars($mat['name']); ?></strong></p>
             <p>City: <?php echo htmlspecialchars($mat['city']); ?></p>
-            <p>Price: $<?php echo htmlspecialchars($mat['price']); ?></p>
+            <p>Price: $<?php echo number_format($mat['price'], 2); ?></p>
             <p>Quantity: <?php echo htmlspecialchars($mat['quantity']); ?></p>
             <?php if (!empty($mat['description'])): ?>
               <p><span class="description-text" onclick="alert('<?php echo htmlspecialchars(addslashes($mat['description'])); ?>')">View Description</span></p>
@@ -765,102 +877,114 @@ if (isset($_SESSION['user_id'])) {
     <?php endif; ?>
     <form method="POST" enctype="multipart/form-data" class="card p-4">
       <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
-      <label>Material Name</label>
-      <div class="material-select-wrapper">
-        <select name="name" class="form-control mb-3" required>
-          <option disabled selected>Select material</option>
-          <option>Steel</option>
-          <option>Cement</option>
-          <option>Concrete</option>
-          <option>Ready Mix Concrete</option>
-          <option>Binding Wires</option>
-          <option>Stone</option>
-          <option>Brick Blocks</option>
-          <option>Aggregate</option>
-          <option>Ceramics</option>
-          <option>Plaster</option>
-          <option>Pipes</option>
-          <option>Roofing</option>
-          <option>Plastic</option>
-          <option>Glass</option>
-          <option>Wood</option>
-          <option>Flooring</option>
-          <option>Sand</option>
-          <option>Gravel</option>
-          <option>Waterproofing Chemicals</option>
-          <option>Clay Bricks</option>
-          <option>Fly Ash Bricks</option>
-          <option>Solid Concrete Blocks</option>
-          <option>Hollow Blocks</option>
-          <option>AAC Blocks</option>
-          <option>Paint</option>
-        </select>
+      <div class="mb-3">
+        <label for="name" class="form-label">Material Name</label>
+        <div class="material-select-wrapper">
+          <select name="name" id="name" class="form-control" required>
+            <option disabled selected>Select material</option>
+            <option>Steel</option>
+            <option>Cement</option>
+            <option>Concrete</option>
+            <option>Ready Mix Concrete</option>
+            <option>Binding Wires</option>
+            <option>Stone</option>
+            <option>Brick Blocks</option>
+            <option>Aggregate</option>
+            <option>Ceramics</option>
+            <option>Plaster</option>
+            <option>Pipes</option>
+            <option>Roofing</option>
+            <option>Plastic</option>
+            <option>Glass</option>
+            <option>Wood</option>
+            <option>Flooring</option>
+            <option>Sand</option>
+            <option>Gravel</option>
+            <option>Waterproofing Chemicals</option>
+            <option>Clay Bricks</option>
+            <option>Fly Ash Bricks</option>
+            <option>Solid Concrete Blocks</option>
+            <option>Hollow Blocks</option>
+            <option>AAC Blocks</option>
+            <option>Paint</option>
+          </select>
+        </div>
       </div>
-      <label>City</label>
-      <div class="material-select-wrapper">
-        <select name="city" class="form-control mb-3" required>
-          <option disabled selected>Select city</option>
-          <option>Karachi</option>
-          <option>Lahore</option>
-          <option>Faisalabad</option>
-          <option>Rawalpindi</option>
-          <option>Multan</option>
-          <option>Hyderabad</option>
-          <option>Gujranwala</option>
-          <option>Peshawar</option>
-          <option>Quetta</option>
-          <option>Islamabad</option>
-          <option>Sargodha</option>
-          <option>Sialkot</option>
-          <option>Bahawalpur</option>
-          <option>Sukkur</option>
-          <option>Larkana</option>
-          <option>Sheikhupura</option>
-          <option>Mirpur</option>
-          <option>Rahim Yar Khan</option>
-          <option>Gujrat</option>
-          <option>Mardan</option>
-          <option>Kasur</option>
-          <option>Dera Ghazi Khan</option>
-          <option>Sahiwal</option>
-          <option>Nawabshah</option>
-          <option>Okara</option>
-          <option>Gilgit</option>
-          <option>Chiniot</option>
-          <option>Sadiqabad</option>
-          <option>Burewala</option>
-          <option>Jhelum</option>
-          <option>Khanewal</option>
-          <option>Hafizabad</option>
-          <option>Kohat</option>
-          <option>Muzaffargarh</option>
-          <option>Abbottabad</option>
-          <option>Mandi Bahauddin</option>
-          <option>Jacobabad</option>
-          <option>Jhang</option>
-          <option>Khairpur</option>
-          <option>Chishtian</option>
-          <option>Daska</option>
-          <option>Kamoke</option>
-          <option>Attock</option>
-          <option>Bhakkar</option>
-          <option>Zhob</option>
-          <option>Ghotki</option>
-          <option>Mianwali</option>
-          <option>Jamshoro</option>
-          <option>Mansehra</option>
-          <option>Tando Allahyar</option>
-          <option>Nowshera</option>
-        </select>
+      <div class="mb-3">
+        <label for="city" class="form-label">City</label>
+        <div class="material-select-wrapper">
+          <select name="city" id="city" class="form-control" required>
+            <option disabled selected>Select city</option>
+            <option>Karachi</option>
+            <option>Lahore</option>
+            <option>Faisalabad</option>
+            <option>Rawalpindi</option>
+            <option>Multan</option>
+            <option>Hyderabad</option>
+            <option>Gujranwala</option>
+            <option>Peshawar</option>
+            <option>Quetta</option>
+            <option>Islamabad</option>
+            <option>Sargodha</option>
+            <option>Sialkot</option>
+            <option>Bahawalpur</option>
+            <option>Sukkur</option>
+            <option>Larkana</option>
+            <option>Sheikhupura</option>
+            <option>Mirpur</option>
+            <option>Rahim Yar Khan</option>
+            <option>Gujrat</option>
+            <option>Mardan</option>
+            <option>Kasur</option>
+            <option>Dera Ghazi Khan</option>
+            <option>Sahiwal</option>
+            <option>Nawabshah</option>
+            <option>Okara</option>
+            <option>Gilgit</option>
+            <option>Chiniot</option>
+            <option>Sadiqabad</option>
+            <option>Burewala</option>
+            <option>Jhelum</option>
+            <option>Khanewal</option>
+            <option>Hafizabad</option>
+            <option>Kohat</option>
+            <option>Muzaffargarh</option>
+            <option>Abbottabad</option>
+            <option>Mandi Bahauddin</option>
+            <option>Jacobabad</option>
+            <option>Jhang</option>
+            <option>Khairpur</option>
+            <option>Chishtian</option>
+            <option>Daska</option>
+            <option>Kamoke</option>
+            <option>Attock</option>
+            <option>Bhakkar</option>
+            <option>Zhob</option>
+            <option>Ghotki</option>
+            <option>Mianwali</option>
+            <option>Jamshoro</option>
+            <option>Mansehra</option>
+            <option>Tando Allahyar</option>
+            <option>Nowshera</option>
+          </select>
+        </div>
       </div>
-      <label>Description</label>
-      <textarea name="description" class="form-control mb-3"></textarea>
-      <label>Price ($)</label>
-      <input type="number" name="price" step="0.01" min="0.01" class="form-control mb-3" required>
-      <label>Quantity</label>
-      <input type="number" name="quantity" min="0" class="form-control mb-3" required>
-      <label>Upload Image</label>
-      <input type="file" name="image" class="form-control mb-3" accept="image/jpeg,image/png,image/gif" required>
+      <div class="mb-3">
+        <label for="description" class="form-label">Description</label>
+        <textarea name="description" id="description" class="form-control"></textarea>
+      </div>
+      <div class="mb-3">
+        <label for="price" class="form-label">Price ($)</label>
+        <input type="number" name="price" id="price" step="0.01" min="0.01" max="99999999.99" class="form-control" required>
+      </div>
+      <div class="mb-3">
+        <label for="quantity" class="form-label">Quantity</label>
+        <input type="number" name="quantity" id="quantity" min="0" class="form-control" required>
+      </div>
+      <div class="mb-3">
+        <label for="image" class="form-label">Upload Image</label>
+        <input type="file" name="image" id="image" class="form-control" accept="image/jpeg,image/png,image/gif" required>
+      </div>
       <button type="submit" name="upload_material" class="btn btn-primary">Upload</button>
     </form>
   <?php endif; ?>
@@ -909,7 +1033,7 @@ $(document).ready(function() {
             </button>
             <ul class="dropdown-menu" aria-labelledby="filterDropdown">
               <li><label class="dropdown-item"><input type="checkbox" class="status-filter" value="pending" checked> Pending</label></li>
-              <li><label class="dropdown-item"><input type="checkbox" class="status-filter" value="confirmed"> Confirmed</label></li>
+              <li><label class="dropdown-item"><input type="checkbox" class="status-filter" value="processed"> Processed</label></li>
               <li><label class="dropdown-item"><input type="checkbox" class="status-filter" value="shipped"> Shipped</label></li>
               <li><label class="dropdown-item"><input type="checkbox" class="status-filter" value="delivered"> Delivered</label></li>
               <li><label class="dropdown-item"><input type="checkbox" class="status-filter" value="cancelled"> Cancelled</label></li>
