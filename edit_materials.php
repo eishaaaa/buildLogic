@@ -64,7 +64,8 @@ if (isset($_POST['update_material'])) {
         } elseif ($file_size > $max_size) {
             $error = "Image size must be less than 5MB.";
         } else {
-            $targetDir = __DIR__ . "/Uploads/";
+            $targetDir = $_SERVER['DOCUMENT_ROOT'] . '/Uploads/';
+            $relativePath = '/Uploads/';
             if (!is_dir($targetDir)) {
                 if (!mkdir($targetDir, 0755, true)) {
                     $error = "Failed to create Uploads directory.";
@@ -75,14 +76,14 @@ if (isset($_POST['update_material'])) {
                 $fileName = basename($_FILES["image"]["name"]);
                 $fileName = preg_replace("/[^A-Za-z0-9._-]/", "", $fileName); // Sanitize filename
                 $targetFile = $targetDir . time() . "_" . $fileName;
+                $image_path = $relativePath . basename($targetFile);
                 if (move_uploaded_file($_FILES["image"]["tmp_name"], $targetFile)) {
                     // Delete old image if it exists
-                    if (!empty($image_path) && file_exists(__DIR__ . "/" . $image_path)) {
-                        if (!unlink(__DIR__ . "/" . $image_path)) {
-                            error_log("Failed to delete old image: " . $image_path);
+                    if (!empty($image_path) && file_exists($_SERVER['DOCUMENT_ROOT'] . $material['image'])) {
+                        if (!unlink($_SERVER['DOCUMENT_ROOT'] . $material['image'])) {
+                            error_log("Failed to delete old image: " . $material['image']);
                         }
                     }
-                    $image_path = "Uploads/" . basename($targetFile);
                     if (!file_exists($targetFile)) {
                         $error = "Image saved but not found on server.";
                         error_log("Image not found after upload: $targetFile");
@@ -123,7 +124,17 @@ if (isset($_POST['update_material'])) {
   <title>Edit Material</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
-    .placeholder-image { width: 100px; height: 70px; background-color: #e0e0e0; display: flex; align-items: center; justify-content: center; color: #666; font-size: 12px; text-align: center; }
+    .placeholder-image { 
+      width: 100px; 
+      height: 70px; 
+      background-color: #e0e0e0; 
+      display: flex; 
+      align-items: center; 
+      justify-content: center; 
+      color: #666; 
+      font-size: 12px; 
+      border-radius: 4px; 
+    }
     .material-select-wrapper {
       position: relative;
     }
@@ -142,6 +153,12 @@ if (isset($_POST['update_material'])) {
       font-size: 12px;
       color: #495057;
       pointer-events: none;
+    }
+    .thumb { 
+      width: 100px; 
+      height: 70px; 
+      object-fit: cover; 
+      border-radius: 4px; 
     }
   </style>
 </head>
@@ -249,11 +266,11 @@ if (isset($_POST['update_material'])) {
     <input type="number" name="quantity" class="form-control mb-3" 
            value="<?= htmlspecialchars($material['quantity']) ?>" required>
     <label>Current Image</label><br>
-    <?php if (!empty($material['image']) && file_exists(__DIR__ . "/" . $material['image'])): ?>
-      <img src="<?= htmlspecialchars($material['image']) ?>" alt="<?= htmlspecialchars($material['name']) ?>" 
-           style="width:100px; height:70px; object-fit:cover;" class="mb-2"><br>
+    <?php if (!empty($material['image']) && file_exists($_SERVER['DOCUMENT_ROOT'] . $material['image'])): ?>
+      <img src="<?= htmlspecialchars($material['image']) ?>" class="thumb mb-2" alt="<?= htmlspecialchars($material['name']) ?>">
     <?php else: ?>
       <div class="placeholder-image">No Image</div>
+      <?php error_log("Edit material: Image missing or inaccessible for material ID {$material['id']}: {$material['image']}"); ?>
     <?php endif; ?>
     <label>Upload New Image (optional)</label>
     <input type="file" name="image" class="form-control mb-3" accept="image/jpeg,image/png,image/gif">
