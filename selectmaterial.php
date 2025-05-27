@@ -321,21 +321,21 @@ try {
                     <div class="col-md-4">
                         <div class="material-card">
                             <a href="material_details.php?id=<?php echo $material['id']; ?>">
-                                <?php
-                                // Use relative path for file_exists, assuming Uploads/ is in web root
-                                $image_path = $material['image'] ? './' . $material['image'] : '';
-                                if (!empty($material['image']) && file_exists($image_path)):
-                                    // Use URL-friendly path for src
-                                    $image_url = htmlspecialchars($material['image']);
-                                ?>
-                                    <img src="<?php echo $image_url; ?>" alt="<?php echo htmlspecialchars($material['name']); ?>" class="material-image">
-                                <?php else: ?>
-                                    <div class="placeholder-image">No Image Available</div>
-                                    <?php
-                                    // Log missing image for debugging
-                                    error_log("Image missing for material ID {$material['id']}: {$material['image']}");
-                                    ?>
-                                <?php endif; ?>
+                             <?php
+// Use relative path for file_exists, assuming Uploads/ is in web root
+$image_path = $material['image'] ? $_SERVER['DOCUMENT_ROOT'] . $material['image'] : '';
+if (!empty($material['image']) && file_exists($image_path)):
+    // Use URL-friendly path for src
+    $image_url = htmlspecialchars($material['image']);
+?>
+    <img src="<?php echo $image_url; ?>" alt="<?php echo htmlspecialchars($material['name']); ?>" class="material-image">
+<?php else: ?>
+    <div class="placeholder-image">No Image Available</div>
+    <?php
+    // Log missing image for debugging
+    error_log("Image missing for material ID {$material['id']}: {$material['image']}");
+    ?>
+<?php endif; ?>
                             </a>
                             <h4 class="mt-3"><?php echo htmlspecialchars($material['name']); ?></h4>
                             <p><strong class="text-success">Price:</strong> $<?php echo number_format($material['price'], 2); ?></p>
