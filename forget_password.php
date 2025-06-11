@@ -15,8 +15,8 @@ $errors = [];
 $success = false;
 
 // Gmail SMTP credentials
-$gmailAddress = ''; // Replace with your Gmail address
-$gmailAppPassword = ''; // Replace with your Google App Password
+$gmailAddress = 'eishaturraazia.262@gmail.com'; // Replace with your Gmail address
+$gmailAppPassword = 'edsu hcxv bzdp ztqo'; // Replace with your Google App Password
 error_log('Session ID: ' . session_id());
 
 // Forgot Password Logic
@@ -55,7 +55,7 @@ if ($action === 'forgot_password') {
                     error_log("Reset token generated: $token for $emailAddress");
 
                     // Send reset link via email using PHPMailer
-                    $resetLink = "http://localhost/Practice/reset_password.php?token=$token&email=" . urlencode($emailAddress);
+                    $resetLink = "http://localhost/webdev/reset_password.php?token=$token&email=" . urlencode($emailAddress);
                     $mail = new PHPMailer(true);
                     try {
                         // Enable SMTP debugging
