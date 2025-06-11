@@ -529,8 +529,10 @@
         <div class="container-fluid d-flex justify-content-between  py-3">
 
             <div class="d-flex align-items-center">
-                <img src="images/logo.png" alt="logo" class="site-logo me-2">
-                <div class="header-site-info">
+               <a href="index.php">
+  <img src="images/logo.png" alt="logo" class="site-logo me-2">
+</a>
+    <div class="header-site-info">
                     <h1 class="h4 mb-0">BrickLogic</h1>
                 </div>
             </div>
