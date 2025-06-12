@@ -1,12 +1,15 @@
 -- Create users table
-CREATE TABLE users (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
-    email VARCHAR(150) UNIQUE NOT NULL,
-    password VARCHAR(255) NOT NULL,
-    role ENUM('customer', 'supplier') DEFAULT 'customer',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+CREATE TABLE `users` (
+  `id` INT(11) N` VARCHAR(255) NOT NULL,
+  `role` ENUM('customer', 'supplier') DEFAULT 'customer',
+  `created_at` TIMESTAMP NOT NULL DEFAOT NULL AUTO_INCREMENT,
+  `name` VARCHAR(100) NOT NULL,
+  `email` VARCHAR(150) NOT NULL,
+  `passwordULT CURRENT_TIMESTAMP,
+  `design_count` INT(11) DEFAULT 0,
+  PRIMARY KEY (`id`)
+  PRIMARY KEY (`email`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- Create proposals table
 CREATE TABLE proposals (
@@ -24,27 +27,29 @@ CREATE TABLE proposals (
 );
 
 -- Create designs table with svg_data added
-CREATE TABLE designs (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    proposal_id INT NOT NULL,
-    json_layout JSON NOT NULL,
-    svg_data TEXT,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (proposal_id) REFERENCES proposals(id) ON DELETE CASCADE
-);
+CREATE TABLE `designs` (
+  `id` INT(11) NOT NULL AUTO_INCREMENT,
+  `users_id` INT(11) NOT NULL,
+  `json_layout` LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  `svg_data` TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_users_id` (`users_id`),
+  CONSTRAINT `fk_designs_users` FOREIGN KEY (`users_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
 
 -- Create budgets table with notes and updated_at added
 CREATE TABLE budgets (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    proposal_id INT NOT NULL,
     total_budget DECIMAL(12,2) NOT NULL,
     grey_cost DECIMAL(12,2) NOT NULL,
     material_cost DECIMAL(12,2) NOT NULL,
     labor_cost DECIMAL(12,2) NOT NULL,
     notes TEXT,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending',
-    FOREIGN KEY (proposal_id) REFERENCES proposals(id) ON DELETE CASCADE
+    status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending'
 );
 
 -- Create suppliers table
@@ -133,6 +138,7 @@ CREATE TABLE pricing_plans (
     monthly_price DECIMAL(10, 2) NOT NULL,
     yearly_price DECIMAL(10, 2) NOT NULL,
     features TEXT NOT NULL,
+    design_limit INT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
