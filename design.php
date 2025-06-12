@@ -1632,6 +1632,79 @@ document.querySelectorAll(".panel-item-toggle").forEach((toggle) => {
 });
 
 // Save design to database
+// Assuming floors, svgCanvas, updateRulersAndGrid, updateFloorsDropdown, initializeDragElements, 
+// selectElement, startDrag, and editTextElement are defined globally or in scope
+
+  // Add this function to load a saved design
+async function loadDesign(designId) {
+  try {
+    const response = await fetch(`save_design.php?design_id=${designId}`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    const result = await response.json();
+    console.log('Load response:', result);
+
+    if (result.success) {
+      // Initialize floors from saved json_layout
+      try {
+        floors = result.json_layout ? JSON.parse(result.json_layout) : [];
+      } catch (e) {
+        console.error('Error parsing json_layout:', e);
+        floors = [];
+      }
+
+      // Update SVG canvas with saved svg_data
+      if (result.svg_data) {
+        svgCanvas.innerHTML = result.svg_data;
+      } else {
+        svgCanvas.innerHTML = '';
+      }
+
+      // Reinitialize draggable elements for each floor
+      floors.forEach((floor) => {
+        if (floor.svgContent) {
+          const tempSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+          tempSvg.innerHTML = floor.svgContent;
+          const elements = tempSvg.querySelectorAll(".draggable");
+          elements.forEach((elem) => {
+            elem.addEventListener("mousedown", (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const group = elem.parentNode;
+              const selectionBox = group.querySelector(".selection-box");
+              const resizeHandles = group.querySelectorAll(".resize-handle");
+              selectElement({ main: elem, group, selectionBox, resizeHandles });
+              startDrag(e, elem);
+            });
+            if (elem.getAttribute("data-type") === "text") {
+              elem.addEventListener("dblclick", (e) => {
+                editTextElement(elem, e);
+              });
+            }
+          });
+        }
+      });
+
+      // Update UI
+      updateFloorsDropdown();
+      updateRulersAndGrid();
+
+      // Set current floor if floors exist
+      if (floors.length > 0) {
+        currentFloor = floors[0].id;
+      }
+    } else {
+      console.error('Failed to load design:', result.message);
+      alert('Failed to load design: ' + result.message);
+    }
+  } catch (error) {
+    console.error('Load error:', error);
+    alert('Error loading design: Network or server issue');
+  }
+}
+
+// Modify your existing saveDesign function to include design_id handling
 async function saveDesign() {
   // Update current floor's SVG content
   const currentFloorData = floors.find(f => f.id === currentFloor);
@@ -1643,6 +1716,7 @@ async function saveDesign() {
   // Prepare data
   const json_layout = JSON.stringify(floors);
   const svg_data = svgCanvas.outerHTML;
+  const design_id = new URLSearchParams(window.location.search).get('load_id') || '0';
 
   // Send to server
   try {
@@ -1650,60 +1724,57 @@ async function saveDesign() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        proposal_id: new URLSearchParams(window.location.search).get('proposal_id') || '0',
-        design_id: new URLSearchParams(window.location.search).get('load_id') || '0',
+        design_id,
         json_layout,
         svg_data
       })
     });
     const result = await response.json();
+    console.log('Save response:', result);
     if (result.success) {
       alert('Design saved successfully!');
+      // Update URL with design_id if new design
+      if (result.design_id && design_id === '0') {
+        history.replaceState(null, '', `design.php?load_id=${result.design_id}`);
+      }
     } else {
-      alert('Failed to save design: ' + result.message);
+      if (result.error === 'design_limit_exceeded') {
+        alert('You have reached your design limit. Please upgrade your plan.');
+        window.location.href = 'pricing.php';
+      } else {
+        alert('Failed to save design: ' + (result.message || 'Unknown error'));
+      }
     }
   } catch (error) {
     console.error('Save error:', error);
-    alert('Error saving design.');
+    alert('Error saving design: Network or server issue');
   }
 }
 
-// Initialize on load
+// Replace your existing DOMContentLoaded listener with this
 document.addEventListener("DOMContentLoaded", () => {
-  updateRulersAndGrid();
-  updateFloorsDropdown();
-  initializeDragElements();
+  const urlParams = new URLSearchParams(window.location.search);
+  const loadId = urlParams.get('load_id');
 
-  // Reinitialize draggable elements for saved floors
-  floors.forEach((floor) => {
-    if (floor.svgContent) {
-      const tempSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-      tempSvg.innerHTML = floor.svgContent;
-      const elements = tempSvg.querySelectorAll(".draggable");
-      elements.forEach((elem) => {
-        elem.addEventListener("mousedown", (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const group = elem.parentNode;
-          const selectionBox = group.querySelector(".selection-box");
-          const resizeHandles = group.querySelectorAll(".resize-handle");
-          selectElement({ main: elem, group, selectionBox, resizeHandles });
-          startDrag(e, elem);
-        });
-        if (elem.getAttribute("data-type") === "text") {
-          elem.addEventListener("dblclick", (e) => {
-            editTextElement(elem, e);
-          });
-        }
-      });
+  if (loadId && loadId !== '0') {
+    // Load existing design
+    loadDesign(loadId);
+  } else {
+    // Initialize empty editor
+    updateRulersAndGrid();
+    updateFloorsDropdown();
+    initializeDragElements();
+    // Ensure floors array is initialized if empty
+    if (!floors || floors.length === 0) {
+      floors = [{ id: 'floor1', svgContent: '' }];
+      currentFloor = 'floor1';
     }
-  });
-
+  }
+});
   // Initialize panel options
   document.querySelectorAll(".panel-item-options").forEach((opt) => {
     opt.style.display = "none";
   });
-});
 
 updateFloorsDropdown();
 updateRulersAndGrid();
